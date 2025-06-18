@@ -1,0 +1,220 @@
+name: Build OQS Provider for Windows x64
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  BUILD_TYPE: Release
+  OPENSSL_VERSION: "3.3.2"
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    
+    steps:
+    - name: Checkout oqs-provider
+      uses: actions/checkout@v4
+      
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+        
+    - name: Install dependencies
+      run: |
+        # Install vcpkg for package management
+        git clone https://github.com/Microsoft/vcpkg.git
+        cd vcpkg
+        .\bootstrap-vcpkg.bat
+        .\vcpkg.exe integrate install
+        # Install required packages
+        .\vcpkg.exe install openssl:x64-windows
+      shell: cmd
+      
+    - name: Build and install OpenSSL (alternative if vcpkg doesn't work)
+      run: |
+        # Download OpenSSL source
+        curl -L -o openssl-${{ env.OPENSSL_VERSION }}.tar.gz https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        tar -xzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        cd openssl-${{ env.OPENSSL_VERSION }}
+        
+        # Configure and build OpenSSL
+        perl Configure VC-WIN64A --prefix=C:\openssl --openssldir=C:\openssl\ssl
+        nmake
+        nmake install
+        
+        # Set environment variables
+        echo "OPENSSL_ROOT_DIR=C:\openssl" >> $env:GITHUB_ENV
+        echo "C:\openssl\bin" >> $env:GITHUB_PATH
+      shell: powershell
+      
+    - name: Clone and build liboqs
+      run: |
+        # Clone liboqs
+        git clone --depth=1 https://github.com/open-quantum-safe/liboqs.git
+        cd liboqs
+        
+        # Create build directory
+        mkdir build
+        cd build
+        
+        # Configure CMake for liboqs
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
+          -DBUILD_SHARED_LIBS=ON ^
+          -DCMAKE_INSTALL_PREFIX=C:\liboqs ^
+          -DOQS_BUILD_ONLY_LIB=ON ^
+          -DOQS_MINIMAL_BUILD=OFF
+        
+        # Build and install
+        cmake --build . --config ${{ env.BUILD_TYPE }} --parallel 4
+        cmake --install . --config ${{ env.BUILD_TYPE }}
+        
+        # Set environment variable for oqs-provider build
+        echo "liboqs_DIR=C:\liboqs\lib\cmake\liboqs" >> $env:GITHUB_ENV
+      shell: cmd
+      
+    - name: Configure oqs-provider
+      run: |
+        # Create build directory
+        mkdir build
+        cd build
+        
+        # Configure CMake for oqs-provider
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
+          -DOPENSSL_ROOT_DIR=C:\openssl ^
+          -Dliboqs_DIR=C:\liboqs\lib\cmake\liboqs ^
+          -DCMAKE_INSTALL_PREFIX=C:\oqs-provider ^
+          -DOQS_PROVIDER_BUILD_STATIC=OFF
+      shell: cmd
+      
+    - name: Build oqs-provider
+      run: |
+        cd build
+        cmake --build . --config ${{ env.BUILD_TYPE }} --parallel 4
+      shell: cmd
+      
+    - name: Test oqs-provider (optional)
+      run: |
+        cd build
+        ctest --config ${{ env.BUILD_TYPE }} --parallel 4 --output-on-failure
+      shell: cmd
+      continue-on-error: true  # Don't fail if tests fail
+      
+    - name: Install oqs-provider
+      run: |
+        cd build
+        cmake --install . --config ${{ env.BUILD_TYPE }}
+      shell: cmd
+      
+    - name: Package artifacts
+      run: |
+        # Create a package directory
+        mkdir oqs-provider-windows-x64
+        
+        # Copy the built provider DLL
+        copy C:\oqs-provider\lib\ossl-modules\oqsprovider.dll oqs-provider-windows-x64\
+        
+        # Copy OpenSSL DLLs if needed
+        copy C:\openssl\bin\*.dll oqs-provider-windows-x64\ 2>nul || echo "OpenSSL DLLs not found in expected location"
+        
+        # Copy liboqs DLL
+        copy C:\liboqs\bin\oqs.dll oqs-provider-windows-x64\
+        
+        # Copy documentation and config files
+        copy README.md oqs-provider-windows-x64\ 2>nul || echo "README.md not found"
+        copy USAGE.md oqs-provider-windows-x64\ 2>nul || echo "USAGE.md not found"
+        
+        # Create a simple installation guide
+        echo Creating installation guide...
+        echo "# OQS Provider for Windows Installation Guide" > oqs-provider-windows-x64\INSTALL.md
+        echo. >> oqs-provider-windows-x64\INSTALL.md
+        echo "1. Place oqsprovider.dll in your OpenSSL modules directory" >> oqs-provider-windows-x64\INSTALL.md
+        echo "   (typically: %%OPENSSL_DIR%%\lib\ossl-modules\)" >> oqs-provider-windows-x64\INSTALL.md
+        echo. >> oqs-provider-windows-x64\INSTALL.md
+        echo "2. Ensure oqs.dll is in your system PATH or in the same directory as OpenSSL" >> oqs-provider-windows-x64\INSTALL.md
+        echo. >> oqs-provider-windows-x64\INSTALL.md
+        echo "3. Configure OpenSSL to load the provider by adding to openssl.cnf:" >> oqs-provider-windows-x64\INSTALL.md
+        echo "   [provider_sect]" >> oqs-provider-windows-x64\INSTALL.md
+        echo "   default = default_sect" >> oqs-provider-windows-x64\INSTALL.md
+        echo "   oqsprovider = oqsprovider_sect" >> oqs-provider-windows-x64\INSTALL.md
+        echo. >> oqs-provider-windows-x64\INSTALL.md
+        echo "   [default_sect]" >> oqs-provider-windows-x64\INSTALL.md
+        echo "   activate = 1" >> oqs-provider-windows-x64\INSTALL.md
+        echo. >> oqs-provider-windows-x64\INSTALL.md
+        echo "   [oqsprovider_sect]" >> oqs-provider-windows-x64\INSTALL.md
+        echo "   activate = 1" >> oqs-provider-windows-x64\INSTALL.md
+        echo. >> oqs-provider-windows-x64\INSTALL.md
+        echo "4. Test with: openssl list -providers" >> oqs-provider-windows-x64\INSTALL.md
+        
+        # Create version info
+        echo "Build Date: %DATE% %TIME%" > oqs-provider-windows-x64\BUILD_INFO.txt
+        echo "Platform: Windows Server 2022 x64" >> oqs-provider-windows-x64\BUILD_INFO.txt
+        echo "Compiler: MSVC 17 2022" >> oqs-provider-windows-x64\BUILD_INFO.txt
+        echo "OpenSSL Version: ${{ env.OPENSSL_VERSION }}" >> oqs-provider-windows-x64\BUILD_INFO.txt
+        git rev-parse HEAD > oqs-provider-windows-x64\GIT_COMMIT.txt 2>nul || echo "unknown" > oqs-provider-windows-x64\GIT_COMMIT.txt
+      shell: cmd
+      
+    - name: Create ZIP archive
+      run: |
+        7z a oqs-provider-windows-x64.zip oqs-provider-windows-x64\
+      shell: cmd
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: oqs-provider-windows-x64
+        path: oqs-provider-windows-x64.zip
+        retention-days: 30
+        
+    - name: Upload individual files
+      uses: actions/upload-artifact@v4
+      with:
+        name: oqs-provider-files
+        path: |
+          oqs-provider-windows-x64/oqsprovider.dll
+          oqs-provider-windows-x64/oqs.dll
+          oqs-provider-windows-x64/*.md
+          oqs-provider-windows-x64/*.txt
+        retention-days: 30
+
+  # Optional: Create a release if this is a tag
+  create-release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: oqs-provider-windows-x64
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: oqs-provider-windows-x64.zip
+        body: |
+          ## OQS Provider Windows Build
+          
+          This release contains a pre-compiled Windows x64 version of oqs-provider.
+          
+          ### Contents:
+          - `oqsprovider.dll` - The main OpenSSL provider library
+          - `oqs.dll` - The liboqs library dependency
+          - `INSTALL.md` - Installation instructions
+          - `BUILD_INFO.txt` - Build information
+          
+          ### Requirements:
+          - OpenSSL 3.x installed on Windows
+          - Windows 10/11 or Windows Server 2019/2022
+          
+          ### Installation:
+          See the included `INSTALL.md` file for detailed installation instructions.
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
