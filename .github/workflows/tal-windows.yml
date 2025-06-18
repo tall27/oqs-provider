@@ -1,225 +1,106 @@
-# Add this new job at the end of your existing windows.yml file, after the msvc_native job
+name: Windows tests
 
-  package_artifacts:
-    name: Package Windows Artifacts
-    runs-on: windows-2022
-    needs: [msvc, msvc_native]
-    if: always() && (needs.msvc.result == 'success' || needs.msvc_native.result == 'success')
+on: [pull_request, push]
+
+permissions:
+  contents: read
+
+jobs:
+  coding_style_tests:
+    uses: ./.github/workflows/coding_style.yml
+
+  msvc:
+    strategy:
+      matrix:
+        os:
+          - windows-2022
+        platform:
+          - arch: win64
+            oqsconfig: -DOQS_ALGS_ENABLED=STD
+            osslconfig: no-shared no-fips VC-WIN64A
+    runs-on: ${{matrix.os}}
+    needs: [coding_style_tests]
     steps:
-      - name: Checkout repository for docs
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # pin@v4
-        
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Restore OpenSSL32 cache
+        id: cache-openssl32
+        uses: actions/cache@v4
         with:
-          path: artifacts
-          
-      - name: Create distribution package
+          path: c:\openssl32
+          key: ${{ runner.os }}-msvcopenssl32
+      - uses: actions/checkout@v4
+      - name: Checkout OpenSSL master
+        if: steps.cache-openssl32.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+          repository: openssl/openssl
+          path: openssl
+      - uses: actions/checkout@v4
+        with:
+          set-safe-directory: true
+          repository: open-quantum-safe/liboqs
+          ref: main
+          path: liboqs
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.platform.arch }}
+      - name: Setup nasm for OpenSSL build
+        uses: ilammy/setup-nasm@v1
+        if: steps.cache-openssl32.outputs.cache-hit != 'true'
+        with:
+          platform: ${{ matrix.platform.arch }}
+      - name: Setup perl for OpenSSl build
+        uses: shogo82148/actions-setup-perl@v1
+        if: steps.cache-openssl32.outputs.cache-hit != 'true'
+      - name: build liboqs
         run: |
-          # Create main package directory
-          mkdir oqs-provider-windows-x64
-          
-          # Copy all MSVC-built DLLs
-          Write-Host "Collecting MSVC artifacts..."
-          Get-ChildItem artifacts\*msvc*\*.dll -Recurse | ForEach-Object {
-            Write-Host "Found: $($_.FullName)"
-            Copy-Item $_.FullName oqs-provider-windows-x64\ -Force
-          }
-          
-          # Copy documentation
-          Copy-Item README.md oqs-provider-windows-x64\ -ErrorAction SilentlyContinue
-          Copy-Item USAGE.md oqs-provider-windows-x64\ -ErrorAction SilentlyContinue
-          
-          # Create detailed installation instructions
-          @"
-          # OQS Provider for Windows x64
-          
-          ## Installation Instructions
-          
-          ### 1. Copy Provider Library
-          Copy `oqsprovider.dll` to your OpenSSL provider modules directory:
-          - **Default location**: `C:\Program Files\OpenSSL\lib\ossl-modules\`
-          - **Custom OpenSSL**: `[OPENSSL_DIR]\lib\ossl-modules\`
-          - **vcpkg OpenSSL**: `[VCPKG_ROOT]\installed\x64-windows\lib\ossl-modules\`
-          
-          ### 2. Install Dependencies
-          Ensure you have:
-          - **OpenSSL 3.x** installed and in your PATH
-          - **liboqs library** (will be bundled in future releases)
-          - **Visual C++ Redistributable 2022** (usually pre-installed on modern Windows)
-          
-          ### 3. Configure OpenSSL
-          Edit your `openssl.cnf` file (usually in `C:\Program Files\OpenSSL\bin\cnf\` or similar):
-          
-          ```ini
-          [openssl_init]
-          providers = provider_sect
-          
-          [provider_sect]
-          default = default_sect
-          oqsprovider = oqsprovider_sect
-          
-          [default_sect]
-          activate = 1
-          
-          [oqsprovider_sect]
-          activate = 1
-          ```
-          
-          ### 4. Test Installation
-          
-          **Check if provider loads:**
-          ```cmd
-          openssl list -providers
-          ```
-          You should see both "OpenSSL Default Provider" and "OpenSSL OQS Provider" listed.
-          
-          **List available quantum-safe algorithms:**
-          ```cmd
-          openssl list -signature-algorithms -provider oqsprovider -provider default
-          openssl list -kem-algorithms -provider oqsprovider -provider default
-          ```
-          
-          **Test key generation:**
-          ```cmd
-          openssl genpkey -algorithm dilithium3 -out test_key.pem
-          openssl genpkey -algorithm kyber768 -out test_kem_key.pem
-          ```
-          
-          ## Supported Algorithms
-          
-          ### Post-Quantum Signatures
-          - ML-DSA (Dilithium): mldsa44, mldsa65, mldsa87
-          - Falcon: falcon512, falcon1024
-          - SPHINCS+: Various parameter sets
-          
-          ### Post-Quantum Key Exchange
-          - ML-KEM (Kyber): mlkem512, mlkem768, mlkem1024
-          - FrodoKEM: Multiple parameter sets
-          - BIKE, HQC, and other algorithms
-          
-          ### Hybrid Algorithms
-          - Classical + Post-Quantum combinations (e.g., p256_mlkem768, rsa3072_mldsa65)
-          
-          ## Build Information
-          - **Platform**: Windows x64
-          - **Build Date**: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
-          - **Compiler**: Microsoft Visual C++ 2022
-          - **OpenSSL**: 3.x (static linking)
-          - **Architecture**: x86_64
-          
-          ## System Requirements
-          - Windows 10 version 1809 or later
-          - Windows 11 (all versions)
-          - Windows Server 2019 or later
-          - x64 processor architecture
-          - OpenSSL 3.0 or later
-          
-          ## Troubleshooting
-          
-          **Provider not loading:**
-          - Verify `oqsprovider.dll` is in the correct modules directory
-          - Check OpenSSL configuration file syntax
-          - Ensure all dependencies are installed
-          
-          **Algorithm not found:**
-          - Verify provider is loaded with `openssl list -providers`
-          - Some algorithms may be disabled by default
-          - Check for typos in algorithm names
-          
-          **Performance issues:**
-          - Post-quantum algorithms are computationally intensive
-          - Consider using hybrid algorithms for better performance
-          - Test different parameter sets for your use case
-          
-          ## Support and Documentation
-          - **Project Repository**: https://github.com/open-quantum-safe/oqs-provider
-          - **OQS Documentation**: https://openquantumsafe.org/
-          - **OpenSSL Provider Documentation**: https://www.openssl.org/docs/manmaster/man7/provider.html
-          
-          ## License
-          This software is provided under the MIT License. See the repository for full license terms.
-          "@ | Out-File -FilePath oqs-provider-windows-x64\INSTALL.md -Encoding UTF8
-          
-          # Create build info file
-          @"
-          Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
-          Platform: Windows x64
-          Compiler: Microsoft Visual C++ 2022
-          OpenSSL Version: 3.x (static)
-          Git Commit: $env:GITHUB_SHA
-          Workflow Run: $env:GITHUB_RUN_NUMBER
-          "@ | Out-File -FilePath oqs-provider-windows-x64\BUILD_INFO.txt -Encoding UTF8
-          
-          # List package contents
-          Write-Host "Package contents:"
-          Get-ChildItem oqs-provider-windows-x64 -Recurse | ForEach-Object {
-            $size = if ($_.PSIsContainer) { "DIR" } else { "$([math]::Round($_.Length/1KB, 1)) KB" }
-            Write-Host "  $($_.Name) - $size"
-          }
-        shell: powershell
-        
-      - name: Create ZIP package
+          cmake --version
+          mkdir build
+          cd build
+          cmake -GNinja -DCMAKE_C_COMPILER="cl" -DCMAKE_C_FLAGS="/wd5105" -DCMAKE_VERBOSE_MAKEFILE=ON -DCMAKE_INSTALL_PREFIX="c:\liboqs" ${{ matrix.platform.oqsconfig }} -DOQS_DIST_BUILD=ON ..
+          ninja
+          ninja install
+        working-directory: liboqs
+      - name: prepare the OpenSSL build directory
+        if: steps.cache-openssl32.outputs.cache-hit != 'true'
+        run: mkdir _build
+        working-directory: openssl
+      - name: OpenSSL config
+        if: steps.cache-openssl32.outputs.cache-hit != 'true'
+        working-directory: openssl\_build
         run: |
-          # Create the ZIP package
-          Compress-Archive -Path "oqs-provider-windows-x64\*" -DestinationPath "oqs-provider-windows-x64.zip" -CompressionLevel Optimal
-          
-          # Show package info
-          $zipFile = Get-Item "oqs-provider-windows-x64.zip"
-          Write-Host "Created package: $($zipFile.Name)"
-          Write-Host "Package size: $([math]::Round($zipFile.Length/1MB, 2)) MB"
-        shell: powershell
-        
-      - name: Upload Windows x64 package
+          perl ..\Configure --banner=Configured --prefix=c:\openssl32 no-makedepend ${{ matrix.platform.osslconfig }}
+          perl configdata.pm --dump
+      - name: OpenSSL build
+        if: steps.cache-openssl32.outputs.cache-hit != 'true'
+        working-directory: openssl\_build
+        run: nmake /S
+      - name: OpenSSL install
+        if: steps.cache-openssl32.outputs.cache-hit != 'true'
+        run: |
+          mkdir c:\openssl32
+          nmake install_sw
+        working-directory: openssl\_build
+      - name: Save OpenSSL
+        id: cache-openssl-save
+        if: steps.cache-openssl32.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v3
+        with:
+          path: |
+            c:\openssl32
+          key: ${{ runner.os }}-msvcopenssl32
+      - name: build oqs-provider
+        run: |
+          cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="cl" -DCMAKE_C_FLAGS="/wd5105" -DOPENSSL_ROOT_DIR="c:\openssl32" -Dliboqs_DIR="c:\liboqs\lib\cmake\liboqs" -S . -B _build
+          cd _build
+          ninja
+      - name: Run tests
+        run: |
+          ctest -V --test-dir _build
+
+      # ----------- Artifact: Only the DLL -----------
+      - name: Upload oqsprovider.dll
         uses: actions/upload-artifact@v4
         with:
-          name: oqs-provider-windows-x64-complete
-          path: oqs-provider-windows-x64.zip
-          retention-days: 90
-
-  # Optional: Create releases for tags
-  create_release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    needs: [package_artifacts]
-    if: startsWith(github.ref, 'refs/tags/') && needs.package_artifacts.result == 'success'
-    steps:
-      - name: Download packaged artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: oqs-provider-windows-x64-complete
-          path: release-artifacts
-          
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            release-artifacts/*.zip
-          body: |
-            ## OQS Provider Windows x64 Build
-            
-            Pre-compiled Windows x64 binary for OQS Provider built with MSVC.
-            
-            ### Download:
-            - `oqs-provider-windows-x64.zip` - Complete package with installation instructions
-            
-            ### What's Included:
-            - `oqsprovider.dll` - OpenSSL provider library
-            - `INSTALL.md` - Detailed installation and usage instructions
-            - `BUILD_INFO.txt` - Build information and metadata
-            - Documentation files
-            
-            ### Quick Installation:
-            1. Extract the ZIP file
-            2. Copy `oqsprovider.dll` to your OpenSSL modules directory
-            3. Configure OpenSSL (see INSTALL.md for details)
-            4. Test with `openssl list -providers`
-            
-            ### System Requirements:
-            - Windows 10/11 or Windows Server 2019/2022 (x64)
-            - OpenSSL 3.x
-            - Visual C++ Redistributable 2022
-            
-            See the included `INSTALL.md` for complete installation and usage instructions.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: oqsprovider.dll
+          path: D:/a/oqs-provider/oqs-provider/_build/lib/oqsprovider.dll
