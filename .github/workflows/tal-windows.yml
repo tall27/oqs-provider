@@ -24,33 +24,32 @@ jobs:
       with:
         arch: x64
         
-    - name: Install dependencies
+    - name: Install Perl and NASM
       run: |
-        # Install vcpkg for package management
-        git clone https://github.com/Microsoft/vcpkg.git
-        cd vcpkg
-        .\bootstrap-vcpkg.bat
-        .\vcpkg.exe integrate install
-        # Install required packages
-        .\vcpkg.exe install openssl:x64-windows
+        # Install Strawberry Perl and NASM for OpenSSL compilation
+        choco install strawberryperl nasm -y
       shell: cmd
       
-    - name: Build and install OpenSSL (alternative if vcpkg doesn't work)
+    - name: Build and install OpenSSL
       run: |
-        # Download OpenSSL source
-        curl -L -o openssl-${{ env.OPENSSL_VERSION }}.tar.gz https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        # Download OpenSSL source using curl.exe explicitly
+        curl.exe -L -o openssl-${{ env.OPENSSL_VERSION }}.tar.gz https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        
+        # Extract using tar
         tar -xzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz
         cd openssl-${{ env.OPENSSL_VERSION }}
         
-        # Configure and build OpenSSL
-        perl Configure VC-WIN64A --prefix=C:\openssl --openssldir=C:\openssl\ssl
+        # Configure OpenSSL for Windows x64
+        perl Configure VC-WIN64A --prefix=C:\openssl --openssldir=C:\openssl\ssl no-shared
+        
+        # Build OpenSSL
         nmake
         nmake install
         
-        # Set environment variables
-        echo "OPENSSL_ROOT_DIR=C:\openssl" >> $env:GITHUB_ENV
-        echo "C:\openssl\bin" >> $env:GITHUB_PATH
-      shell: powershell
+        # Add to PATH for subsequent steps
+        echo C:\openssl\bin>>%GITHUB_PATH%
+        echo OPENSSL_ROOT_DIR=C:\openssl>>%GITHUB_ENV%
+      shell: cmd
       
     - name: Clone and build liboqs
       run: |
@@ -64,18 +63,19 @@ jobs:
         
         # Configure CMake for liboqs
         cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
+          -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
           -DBUILD_SHARED_LIBS=ON ^
           -DCMAKE_INSTALL_PREFIX=C:\liboqs ^
           -DOQS_BUILD_ONLY_LIB=ON ^
-          -DOQS_MINIMAL_BUILD=OFF
+          -DOQS_MINIMAL_BUILD=OFF ^
+          -DOPENSSL_ROOT_DIR=C:\openssl
         
         # Build and install
-        cmake --build . --config ${{ env.BUILD_TYPE }} --parallel 4
-        cmake --install . --config ${{ env.BUILD_TYPE }}
+        cmake --build . --config %BUILD_TYPE% --parallel 4
+        cmake --install . --config %BUILD_TYPE%
         
         # Set environment variable for oqs-provider build
-        echo "liboqs_DIR=C:\liboqs\lib\cmake\liboqs" >> $env:GITHUB_ENV
+        echo liboqs_DIR=C:\liboqs\lib\cmake\liboqs>>%GITHUB_ENV%
       shell: cmd
       
     - name: Configure oqs-provider
@@ -86,7 +86,7 @@ jobs:
         
         # Configure CMake for oqs-provider
         cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
+          -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
           -DOPENSSL_ROOT_DIR=C:\openssl ^
           -Dliboqs_DIR=C:\liboqs\lib\cmake\liboqs ^
           -DCMAKE_INSTALL_PREFIX=C:\oqs-provider ^
@@ -96,20 +96,20 @@ jobs:
     - name: Build oqs-provider
       run: |
         cd build
-        cmake --build . --config ${{ env.BUILD_TYPE }} --parallel 4
+        cmake --build . --config %BUILD_TYPE% --parallel 4
       shell: cmd
       
     - name: Test oqs-provider (optional)
       run: |
         cd build
-        ctest --config ${{ env.BUILD_TYPE }} --parallel 4 --output-on-failure
+        ctest --config %BUILD_TYPE% --parallel 4 --output-on-failure
       shell: cmd
       continue-on-error: true  # Don't fail if tests fail
       
     - name: Install oqs-provider
       run: |
         cd build
-        cmake --install . --config ${{ env.BUILD_TYPE }}
+        cmake --install . --config %BUILD_TYPE%
       shell: cmd
       
     - name: Package artifacts
@@ -118,46 +118,61 @@ jobs:
         mkdir oqs-provider-windows-x64
         
         # Copy the built provider DLL
-        copy C:\oqs-provider\lib\ossl-modules\oqsprovider.dll oqs-provider-windows-x64\
+        copy C:\oqs-provider\lib\ossl-modules\oqsprovider.dll oqs-provider-windows-x64\ 2>nul || (
+          echo Checking alternate locations for oqsprovider.dll...
+          copy C:\oqs-provider\bin\oqsprovider.dll oqs-provider-windows-x64\ 2>nul || (
+            echo Provider DLL not found in expected locations!
+            dir C:\oqs-provider /s /b | findstr oqsprovider.dll
+          )
+        )
         
-        # Copy OpenSSL DLLs if needed
-        copy C:\openssl\bin\*.dll oqs-provider-windows-x64\ 2>nul || echo "OpenSSL DLLs not found in expected location"
+        # Copy OpenSSL libraries if they exist
+        copy C:\openssl\lib\*.lib oqs-provider-windows-x64\ 2>nul || echo OpenSSL static libraries not copied
         
         # Copy liboqs DLL
-        copy C:\liboqs\bin\oqs.dll oqs-provider-windows-x64\
+        copy C:\liboqs\bin\oqs.dll oqs-provider-windows-x64\ 2>nul || (
+          echo liboqs DLL not found in bin, checking lib...
+          copy C:\liboqs\lib\oqs.dll oqs-provider-windows-x64\ 2>nul || (
+            echo Searching for oqs.dll...
+            dir C:\liboqs /s /b | findstr oqs.dll
+          )
+        )
         
         # Copy documentation and config files
-        copy README.md oqs-provider-windows-x64\ 2>nul || echo "README.md not found"
-        copy USAGE.md oqs-provider-windows-x64\ 2>nul || echo "USAGE.md not found"
+        copy README.md oqs-provider-windows-x64\ 2>nul || echo README.md not found
+        copy USAGE.md oqs-provider-windows-x64\ 2>nul || echo USAGE.md not found
         
         # Create a simple installation guide
-        echo Creating installation guide...
-        echo "# OQS Provider for Windows Installation Guide" > oqs-provider-windows-x64\INSTALL.md
+        echo # OQS Provider for Windows Installation Guide > oqs-provider-windows-x64\INSTALL.md
         echo. >> oqs-provider-windows-x64\INSTALL.md
-        echo "1. Place oqsprovider.dll in your OpenSSL modules directory" >> oqs-provider-windows-x64\INSTALL.md
-        echo "   (typically: %%OPENSSL_DIR%%\lib\ossl-modules\)" >> oqs-provider-windows-x64\INSTALL.md
+        echo 1. Place oqsprovider.dll in your OpenSSL modules directory >> oqs-provider-windows-x64\INSTALL.md
+        echo    (typically: %%OPENSSL_DIR%%\lib\ossl-modules\) >> oqs-provider-windows-x64\INSTALL.md
         echo. >> oqs-provider-windows-x64\INSTALL.md
-        echo "2. Ensure oqs.dll is in your system PATH or in the same directory as OpenSSL" >> oqs-provider-windows-x64\INSTALL.md
+        echo 2. Ensure oqs.dll is in your system PATH or in the same directory as OpenSSL >> oqs-provider-windows-x64\INSTALL.md
         echo. >> oqs-provider-windows-x64\INSTALL.md
-        echo "3. Configure OpenSSL to load the provider by adding to openssl.cnf:" >> oqs-provider-windows-x64\INSTALL.md
-        echo "   [provider_sect]" >> oqs-provider-windows-x64\INSTALL.md
-        echo "   default = default_sect" >> oqs-provider-windows-x64\INSTALL.md
-        echo "   oqsprovider = oqsprovider_sect" >> oqs-provider-windows-x64\INSTALL.md
+        echo 3. Configure OpenSSL to load the provider by adding to openssl.cnf: >> oqs-provider-windows-x64\INSTALL.md
+        echo    [provider_sect] >> oqs-provider-windows-x64\INSTALL.md
+        echo    default = default_sect >> oqs-provider-windows-x64\INSTALL.md
+        echo    oqsprovider = oqsprovider_sect >> oqs-provider-windows-x64\INSTALL.md
         echo. >> oqs-provider-windows-x64\INSTALL.md
-        echo "   [default_sect]" >> oqs-provider-windows-x64\INSTALL.md
-        echo "   activate = 1" >> oqs-provider-windows-x64\INSTALL.md
+        echo    [default_sect] >> oqs-provider-windows-x64\INSTALL.md
+        echo    activate = 1 >> oqs-provider-windows-x64\INSTALL.md
         echo. >> oqs-provider-windows-x64\INSTALL.md
-        echo "   [oqsprovider_sect]" >> oqs-provider-windows-x64\INSTALL.md
-        echo "   activate = 1" >> oqs-provider-windows-x64\INSTALL.md
+        echo    [oqsprovider_sect] >> oqs-provider-windows-x64\INSTALL.md
+        echo    activate = 1 >> oqs-provider-windows-x64\INSTALL.md
         echo. >> oqs-provider-windows-x64\INSTALL.md
-        echo "4. Test with: openssl list -providers" >> oqs-provider-windows-x64\INSTALL.md
+        echo 4. Test with: openssl list -providers >> oqs-provider-windows-x64\INSTALL.md
         
         # Create version info
-        echo "Build Date: %DATE% %TIME%" > oqs-provider-windows-x64\BUILD_INFO.txt
-        echo "Platform: Windows Server 2022 x64" >> oqs-provider-windows-x64\BUILD_INFO.txt
-        echo "Compiler: MSVC 17 2022" >> oqs-provider-windows-x64\BUILD_INFO.txt
-        echo "OpenSSL Version: ${{ env.OPENSSL_VERSION }}" >> oqs-provider-windows-x64\BUILD_INFO.txt
-        git rev-parse HEAD > oqs-provider-windows-x64\GIT_COMMIT.txt 2>nul || echo "unknown" > oqs-provider-windows-x64\GIT_COMMIT.txt
+        echo Build Date: %DATE% %TIME% > oqs-provider-windows-x64\BUILD_INFO.txt
+        echo Platform: Windows Server 2022 x64 >> oqs-provider-windows-x64\BUILD_INFO.txt
+        echo Compiler: MSVC 17 2022 >> oqs-provider-windows-x64\BUILD_INFO.txt
+        echo OpenSSL Version: %OPENSSL_VERSION% >> oqs-provider-windows-x64\BUILD_INFO.txt
+        git rev-parse HEAD > oqs-provider-windows-x64\GIT_COMMIT.txt 2>nul || echo unknown > oqs-provider-windows-x64\GIT_COMMIT.txt
+        
+        # List contents for debugging
+        echo Contents of package directory:
+        dir oqs-provider-windows-x64
       shell: cmd
       
     - name: Create ZIP archive
