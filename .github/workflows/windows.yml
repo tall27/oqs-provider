@@ -1,4 +1,4 @@
-name: Windows tests
+name: Windows tests1
 
 on: [pull_request, push]
 
