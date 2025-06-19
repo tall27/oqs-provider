@@ -1,6 +1,9 @@
 name: Windows tests
 
-on: [pull_request, push]
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -64,3 +67,27 @@ jobs:
           mkdir c:\openssl32
           cd openssl\_build
           nmake install_sw
+      
+      # Build OQS Provider
+      - name: Configure OQS Provider
+        run: |
+          mkdir build
+          cd build
+          cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DOPENSSL_ROOT_DIR=c:\openssl32 -DLIBOQS_ROOT_DIR=c:\liboqs ..
+
+      - name: Build OQS Provider
+        working-directory: build
+        run: ninja
+
+      - name: Create Artifact Directory
+        run: |
+          mkdir artifacts
+          Copy-Item "build\oqsprov\oqsprov.dll" -Destination "artifacts\"
+          Copy-Item "build\examples\static_oqsprovider.exe" -Destination "artifacts\"
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oqs-provider-windows
+          path: artifacts\
+          retention-days: 7
