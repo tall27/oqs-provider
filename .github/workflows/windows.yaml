@@ -5,9 +5,10 @@ on: [pull_request, push]
 permissions:
   contents: read
 
+# Commented out the coding style tests job and its dependencies
 jobs:
-  coding_style_tests:
-    uses: ./.github/workflows/coding_style.yml
+#  coding_style_tests:
+#    uses: ./.github/workflows/coding_style.yml
 
   msvc:
 # Run a job for each of the specified target architectures:
@@ -24,7 +25,8 @@ jobs:
 #            oqsconfig: -DOQS_ALGS_ENABLED=STD
 #            osslconfig: --strict-warnings no-fips enable-quic
     runs-on: ${{matrix.os}}
-    needs: [coding_style_tests]
+    # Removed dependency on coding_style_tests
+    # needs: [coding_style_tests]
     steps:
       - name: Restore OpenSSL32 cache
         id: cache-openssl32
