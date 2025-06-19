@@ -18,20 +18,27 @@ jobs:
             C:\ProgramData\chocolatey
             C:\Program Files\OpenSSL
             C:\tools\ninja
-          key: ${{ runner.os }}-choco-deps-v2
+          key: ${{ runner.os }}-choco-deps-v3
           restore-keys: |
             ${{ runner.os }}-choco-
 
       # 🎯 SMART INSTALLATION (only if not cached)
       - name: Install dependencies via Chocolatey
         run: |
-          # Install OpenSSL if not present
-          if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
-            Write-Host "Installing OpenSSL via Chocolatey..."
-            choco install openssl --quiet --yes
-            refreshenv
-          } else {
-            Write-Host "✅ OpenSSL found"
+          # Check for OpenSSL 3.x specifically
+          $openssl_version = ""
+          try {
+            $openssl_version = & "C:\Program Files\OpenSSL\bin\openssl.exe" version 2>$null
+            if ($openssl_version -match "OpenSSL 3\.") {
+              Write-Host "✅ OpenSSL 3.x found: $openssl_version"
+            } else {
+              Write-Host "❌ Found older OpenSSL: $openssl_version"
+              Write-Host "Installing OpenSSL 3.x..."
+              choco install openssl --version=3.5.0 --force --quiet --yes
+            }
+          } catch {
+            Write-Host "Installing OpenSSL 3.x..."
+            choco install openssl --version=3.5.0 --force --quiet --yes
           }
           
           # Install Ninja if not present
