@@ -1,0 +1,84 @@
+name: Windows tests
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  msvc:
+    strategy:
+      matrix:
+        os:
+          - windows-2022
+        platform:
+          - arch: win64
+            oqsconfig: -DOQS_ALGS_ENABLED=STD
+            osslconfig: no-shared no-fips VC-WIN64A
+    runs-on: ${{matrix.os}}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download pre-built OpenSSL
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: windows.yaml
+          repo: tall27/openssl-build
+          run_id: 15718255982
+          name: openssl-windows
+          path: openssl-prebuilt
+
+      - name: Install pre-built OpenSSL
+        run: |
+          mkdir c:\openssl32
+          Copy-Item -Path "openssl-prebuilt\*" -Destination "c:\openssl32\" -Recurse -Force
+
+      - uses: actions/checkout@v4
+        with:
+          repository: open-quantum-safe/liboqs
+          ref: main
+          path: liboqs
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.platform.arch }}
+
+      - name: Install Ninja
+        run: choco install ninja
+
+      - name: build liboqs
+        run: |
+          cmake --version
+          mkdir build
+          cd build
+          cmake -GNinja -DCMAKE_C_COMPILER="cl" -DCMAKE_C_FLAGS="/wd5105" -DCMAKE_VERBOSE_MAKEFILE=ON -DCMAKE_INSTALL_PREFIX="c:\liboqs" ${{ matrix.platform.oqsconfig }} -DOQS_DIST_BUILD=ON ..
+          ninja
+          ninja install
+        working-directory: liboqs
+
+      - name: Configure OQS Provider
+        run: |
+          mkdir build
+          cd build
+          cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DOPENSSL_ROOT_DIR=c:\openssl32 -DLIBOQS_ROOT_DIR=c:\liboqs ..
+
+      - name: Build OQS Provider
+        working-directory: build
+        run: ninja
+
+      - name: Create Artifact Directory
+        run: |
+          mkdir artifacts
+          Copy-Item "build\oqsprov\oqsprov.dll" -Destination "artifacts\"
+          Copy-Item "build\examples\static_oqsprovider.exe" -Destination "artifacts\"
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oqs-provider-windows
+          path: artifacts\
+          retention-days: 7
