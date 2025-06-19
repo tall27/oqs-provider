@@ -16,20 +16,12 @@ jobs:
       - name: Install Ninja
         run: choco install ninja
 
-      - name: Download pre-built OpenSSL
-        uses: dawidd6/action-download-artifact@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          workflow: windows.yaml
-          repo: tall27/openssl-build
-          run_id: 15718255982
-          name: openssl-windows
-          path: openssl-prebuilt
-
-      - name: Install pre-built OpenSSL
+      - name: Download and Install OpenSSL
         run: |
           mkdir c:\openssl32
-          Copy-Item -Path "openssl-prebuilt\*" -Destination "c:\openssl32\" -Recurse -Force
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/openssl.exe" -OutFile "c:\openssl32\openssl.exe"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/libcrypto-3-x64.dll" -OutFile "c:\openssl32\libcrypto-3-x64.dll"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/libssl-3-x64.dll" -OutFile "c:\openssl32\libssl-3-x64.dll"
 
       - name: Build OQS Provider
         run: |
