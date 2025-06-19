@@ -1,0 +1,161 @@
+name: Windows x64 Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+        - Release
+        - Debug
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64-release:
+    runs-on: windows-2022
+    
+    steps:
+      - name: Checkout oqs-provider
+        uses: actions/checkout@v4
+        
+      - name: Checkout OpenSSL
+        uses: actions/checkout@v4
+        with:
+          repository: openssl/openssl
+          path: openssl
+          ref: master
+          
+      - name: Checkout liboqs
+        uses: actions/checkout@v4
+        with:
+          repository: open-quantum-safe/liboqs
+          ref: main
+          path: liboqs
+          
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          
+      - name: Setup NASM
+        uses: ilammy/setup-nasm@v1
+        with:
+          platform: x64
+          
+      - name: Setup Perl
+        uses: shogo82148/actions-setup-perl@v1
+        
+      - name: Cache OpenSSL
+        id: cache-openssl
+        uses: actions/cache@v4
+        with:
+          path: c:\openssl-x64
+          key: ${{ runner.os }}-openssl-x64-${{ hashFiles('openssl/**') }}
+          
+      - name: Build OpenSSL
+        if: steps.cache-openssl.outputs.cache-hit != 'true'
+        working-directory: openssl
+        run: |
+          mkdir _build
+          cd _build
+          perl ..\Configure --prefix=c:\openssl-x64 no-shared no-fips VC-WIN64A
+          nmake /S
+          nmake install_sw
+          
+      - name: Build liboqs
+        working-directory: liboqs
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_INSTALL_PREFIX="c:\liboqs" -DOQS_ALGS_ENABLED=STD -DOQS_DIST_BUILD=ON
+          cmake --build build --config ${{ github.event.inputs.build_type || 'Release' }}
+          cmake --install build --config ${{ github.event.inputs.build_type || 'Release' }}
+          
+      - name: Build OQS Provider
+        run: |
+          cmake -B _build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type || 'Release' }} -DOPENSSL_ROOT_DIR="c:\openssl-x64" -Dliboqs_DIR="c:\liboqs\lib\cmake\liboqs"
+          cmake --build _build --config ${{ github.event.inputs.build_type || 'Release' }}
+          
+      - name: Test OQS Provider
+        run: |
+          ctest --test-dir _build -C ${{ github.event.inputs.build_type || 'Release' }} --output-on-failure
+          
+      - name: Package Release
+        run: |
+          mkdir oqs-provider-windows-x64
+          mkdir oqs-provider-windows-x64\bin
+          mkdir oqs-provider-windows-x64\lib
+          mkdir oqs-provider-windows-x64\include
+          mkdir oqs-provider-windows-x64\docs
+          
+          # Copy main provider DLL
+          copy _build\lib\${{ github.event.inputs.build_type || 'Release' }}\oqsprovider.dll oqs-provider-windows-x64\lib\
+          
+          # Copy liboqs library
+          copy c:\liboqs\bin\oqs.dll oqs-provider-windows-x64\bin\
+          copy c:\liboqs\lib\oqs.lib oqs-provider-windows-x64\lib\
+          
+          # Copy headers
+          xcopy /E /I c:\liboqs\include oqs-provider-windows-x64\include
+          
+          # Copy documentation
+          copy README.md oqs-provider-windows-x64\docs\
+          copy LICENSE.txt oqs-provider-windows-x64\docs\
+          copy ALGORITHMS.md oqs-provider-windows-x64\docs\
+          copy USAGE.md oqs-provider-windows-x64\docs\
+          
+          # Create installation script
+          echo @echo off > oqs-provider-windows-x64\install.bat
+          echo echo Installing OQS Provider for OpenSSL 3.x >> oqs-provider-windows-x64\install.bat
+          echo echo. >> oqs-provider-windows-x64\install.bat
+          echo echo Please set OPENSSL_MODULES environment variable to: >> oqs-provider-windows-x64\install.bat
+          echo echo   %cd%\lib >> oqs-provider-windows-x64\install.bat
+          echo echo. >> oqs-provider-windows-x64\install.bat
+          echo echo Or copy oqsprovider.dll to your OpenSSL modules directory >> oqs-provider-windows-x64\install.bat
+          echo pause >> oqs-provider-windows-x64\install.bat
+          
+          # Create verification script
+          echo @echo off > oqs-provider-windows-x64\verify.bat
+          echo echo Verifying OQS Provider installation... >> oqs-provider-windows-x64\verify.bat
+          echo set OPENSSL_MODULES=%cd%\lib >> oqs-provider-windows-x64\verify.bat
+          echo openssl list -providers -provider oqsprovider -provider default >> oqs-provider-windows-x64\verify.bat
+          echo echo. >> oqs-provider-windows-x64\verify.bat
+          echo echo Available quantum-safe signature algorithms: >> oqs-provider-windows-x64\verify.bat
+          echo openssl list -signature-algorithms -provider oqsprovider >> oqs-provider-windows-x64\verify.bat
+          echo echo. >> oqs-provider-windows-x64\verify.bat
+          echo echo Available quantum-safe KEM algorithms: >> oqs-provider-windows-x64\verify.bat
+          echo openssl list -kem-algorithms -provider oqsprovider >> oqs-provider-windows-x64\verify.bat
+          echo pause >> oqs-provider-windows-x64\verify.bat
+          
+      - name: Create ZIP package
+        run: |
+          Compress-Archive -Path oqs-provider-windows-x64 -DestinationPath oqs-provider-windows-server-2022-x64.zip
+          
+      - name: Upload Release Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: oqs-provider-windows-server-2022-x64
+          path: oqs-provider-windows-server-2022-x64.zip
+          retention-days: 30
+          
+      - name: Display Build Summary
+        run: |
+          echo "==================================="
+          echo "OQS Provider Windows x64 Build Complete"
+          echo "==================================="
+          echo ""
+          echo "Build Type: ${{ github.event.inputs.build_type || 'Release' }}"
+          echo "Target: Windows Server 2022 x64"
+          echo "OpenSSL: 3.x (master branch)"
+          echo "liboqs: Latest main branch"
+          echo ""
+          echo "Package Contents:"
+          echo "- oqsprovider.dll (main provider library)"
+          echo "- oqs.dll (liboqs shared library)" 
+          echo "- Headers and documentation"
+          echo "- Installation and verification scripts"
+          echo ""
+          echo "Download the artifact from the Actions tab to get your compiled binary."
