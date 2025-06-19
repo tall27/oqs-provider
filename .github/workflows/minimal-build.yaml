@@ -1,4 +1,4 @@
-name: Minimal Windows Build (Cached)
+name: Minimal Windows Build (Self-Hosted)
 on:
   workflow_dispatch:
 jobs:
@@ -6,9 +6,198 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
+      
+      - name: Setup MSVC Environment
+        run: |
+          # Check if compiler is already in PATH
+          try {
+            $null = Get-Command cl.exe -ErrorAction Stop
+            Write-Host "✅ C++ compiler already available"
+          } catch {
+            Write-Host "Setting up Visual Studio environment..."
+            
+            # Find Visual Studio installations using vswhere
+            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            if (Test-Path $vswhere) {
+              $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+              if ($vsPath) {
+                $vcvarsall = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+                Write-Host "Found Visual Studio at: $vsPath"
+              }
+            }
+            
+            # Fallback: Try standard locations (including Community edition)
+            if (-not $vcvarsall -or -not (Test-Path $vcvarsall)) {
+              $vcvarsall_paths = @(
+                "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat",
+                "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat",
+                "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat",
+                "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
+              )
+              
+              foreach ($path in $vcvarsall_paths) {
+                if (Test-Path $path) {
+                  $vcvarsall = $path
+                  Write-Host "Found Visual Studio at: $path"
+                  break
+                }
+              }
+            }
+            
+            if ($vcvarsall -and (Test-Path $vcvarsall)) {
+              Write-Host "Setting up Visual Studio environment from: $vcvarsall"
+              
+              # Run vcvarsall and capture environment
+              $output = cmd /c "`"$vcvarsall`" x64 >nul 2>&1 && set"
+              foreach ($line in $output) {
+                if ($line -match '^([^=]+)=(.*)
+
+      # 🚀 CACHING ENABLED HERE
+      - name: Cache Chocolatey packages
+        uses: actions/cache@v4
         with:
-          arch: win64
+          path: |
+            C:\ProgramData\chocolatey
+            C:\Program Files\OpenSSL
+            C:\tools\ninja
+            C:\liboqs
+          key: ${{ runner.os }}-choco-deps-v4
+          restore-keys: |
+            ${{ runner.os }}-choco-
+
+      # 🎯 SMART INSTALLATION (only if not cached)
+      - name: Install dependencies via Chocolatey
+        run: |
+          # Check for OpenSSL 3.x specifically
+          $openssl_version = ""
+          try {
+            $openssl_version = & "C:\Program Files\OpenSSL\bin\openssl.exe" version 2>$null
+            if ($openssl_version -match "OpenSSL 3\.") {
+              Write-Host "✅ OpenSSL 3.x found: $openssl_version"
+            } else {
+              Write-Host "❌ Found older OpenSSL: $openssl_version"
+              Write-Host "Installing OpenSSL 3.x..."
+              choco install openssl --version=3.5.0 --force --quiet --yes
+            }
+          } catch {
+            Write-Host "Installing OpenSSL 3.x..."
+            choco install openssl --version=3.5.0 --force --quiet --yes
+          }
+          
+          # Install Ninja if not present
+          if (-not (Test-Path "C:\tools\ninja\ninja.exe")) {
+            Write-Host "Installing Ninja via Chocolatey..."
+            choco install ninja --quiet --yes
+          } else {
+            Write-Host "✅ Ninja found in cache"
+          }
+          
+          # Auto-detect OpenSSL location
+          $openssl_paths = @(
+            "C:\Program Files\OpenSSL",
+            "C:\Program Files\OpenSSL-Win64", 
+            "C:\OpenSSL",
+            "C:\OpenSSL-Win64"
+          )
+          
+          foreach ($path in $openssl_paths) {
+            if (Test-Path "$path\bin\openssl.exe") {
+              Write-Host "Found OpenSSL at: $path"
+              echo "OPENSSL_ROOT_DIR=$path" >> $env:GITHUB_ENV
+              break
+            }
+          }
+
+      - name: Verify OpenSSL installation
+        run: |
+          Write-Host "OpenSSL location: $env:OPENSSL_ROOT_DIR"
+          if (Test-Path "$env:OPENSSL_ROOT_DIR\bin\openssl.exe") {
+            & "$env:OPENSSL_ROOT_DIR\bin\openssl.exe" version
+            Write-Host "✅ OpenSSL verified"
+          } else {
+            Write-Host "❌ OpenSSL not found"
+            exit 1
+          }
+
+      - name: Build and Install liboqs
+        run: |
+          # Check if liboqs is already built (from cache)
+          if (-not (Test-Path "C:\liboqs\lib\cmake\liboqs\liboqsConfig.cmake")) {
+            Write-Host "Building liboqs..."
+            
+            # Clone liboqs
+            git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git C:\liboqs-src
+            
+            # Build liboqs
+            mkdir C:\liboqs-build
+            cd C:\liboqs-build
+            
+            cmake -GNinja `
+              -DCMAKE_BUILD_TYPE=Release `
+              -DCMAKE_INSTALL_PREFIX=C:\liboqs `
+              -DBUILD_SHARED_LIBS=OFF `
+              -DOQS_BUILD_ONLY_LIB=ON `
+              C:\liboqs-src
+              
+            ninja install
+            
+            Write-Host "✅ liboqs built and installed"
+          } else {
+            Write-Host "✅ liboqs found in cache"
+          }
+          
+          # Set liboqs path for oqs-provider
+          echo "liboqs_DIR=C:\liboqs\lib\cmake\liboqs" >> $env:GITHUB_ENV
+
+      - name: Build OQS Provider
+        run: |
+          mkdir build
+          cd build
+          cmake -GNinja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DOQS_MINIMAL_BUILD=ON `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DBUILD_TESTING=OFF `
+            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" `
+            -Dliboqs_DIR="$env:liboqs_DIR" `
+            ..
+          ninja
+
+      - name: Create Artifact Directory
+        run: |
+          mkdir artifacts
+          Copy-Item "build\oqsprov\oqsprov.dll" -Destination "artifacts\"
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oqs-provider-windows-minimal
+          path: artifacts\
+          retention-days: 7) {
+                  $name = $matches[1]
+                  $value = $matches[2]
+                  [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+                  if ($name -eq 'PATH') {
+                    $env:PATH = $value
+                  }
+                }
+              }
+              
+              # Verify compiler is now available
+              try {
+                $null = Get-Command cl.exe -ErrorAction Stop
+                Write-Host "✅ Visual Studio environment configured successfully"
+              } catch {
+                Write-Host "❌ Failed to configure Visual Studio environment"
+                exit 1
+              }
+            } else {
+              Write-Host "❌ Visual Studio Build Tools not found"
+              Write-Host "Available Visual Studio installations:"
+              Get-ChildItem "C:\Program Files*\Microsoft Visual Studio" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+              exit 1
+            }
+          }
 
       # 🚀 CACHING ENABLED HERE
       - name: Cache Chocolatey packages
