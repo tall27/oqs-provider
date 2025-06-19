@@ -12,16 +12,16 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: win64
-
-      - name: Install Ninja
-        run: choco install ninja
-
+          
       - name: Download and Install OpenSSL
         run: |
           mkdir c:\openssl32
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/openssl.exe" -OutFile "c:\openssl32\openssl.exe"
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/libcrypto-3-x64.dll" -OutFile "c:\openssl32\libcrypto-3-x64.dll"
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/libssl-3-x64.dll" -OutFile "c:\openssl32\libssl-3-x64.dll"
+          Invoke-WebRequest -Uri "https://github.com/tall27/openssl-build/raw/refs/heads/master/openssl.exe"
+          #Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/libcrypto-3-x64.dll" -OutFile "c:\openssl32\libcrypto-3-x64.dll"
+          #Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/libssl-3-x64.dll" -OutFile "c:\openssl32\libssl-3-x64.dll"
+          
+      - name: Install Ninja
+        run: choco install ninja
 
       - name: Build OQS Provider
         run: |
