@@ -10,40 +10,62 @@ jobs:
         with:
           arch: win64
 
-      - name: Cache build dependencies
+      # 🚀 CACHING ENABLED HERE
+      - name: Cache Chocolatey packages
         uses: actions/cache@v4
         with:
           path: |
             C:\ProgramData\chocolatey
             C:\Program Files\OpenSSL-Win64
             C:\tools\ninja
-          key: ${{ runner.os }}-build-deps-${{ hashFiles('.github/workflows/*.yml') }}-v1
+          key: ${{ runner.os }}-choco-deps-v1
           restore-keys: |
-            ${{ runner.os }}-build-deps-
+            ${{ runner.os }}-choco-
 
-      - name: Install dependencies (if not cached)
+      # 🎯 SMART INSTALLATION (only if not cached)
+      - name: Install dependencies via Chocolatey
         run: |
+          # Check if OpenSSL is already installed (from cache)
           if (-not (Test-Path "C:\Program Files\OpenSSL-Win64\bin\openssl.exe")) {
-            Write-Host "Installing OpenSSL..."
+            Write-Host "Installing OpenSSL via Chocolatey..."
             choco install openssl --quiet --yes
           } else {
             Write-Host "✅ OpenSSL found in cache"
           }
           
+          # Check if Ninja is already installed (from cache)
           if (-not (Test-Path "C:\tools\ninja\ninja.exe")) {
-            Write-Host "Installing Ninja..."
+            Write-Host "Installing Ninja via Chocolatey..."
             choco install ninja --quiet --yes
           } else {
             Write-Host "✅ Ninja found in cache"
           }
           
+          # Set environment variable
           echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+
+      - name: Verify OpenSSL installation
+        run: |
+          Write-Host "OpenSSL location: $env:OPENSSL_ROOT_DIR"
+          if (Test-Path "$env:OPENSSL_ROOT_DIR\bin\openssl.exe") {
+            & "$env:OPENSSL_ROOT_DIR\bin\openssl.exe" version
+            Write-Host "✅ OpenSSL verified"
+          } else {
+            Write-Host "❌ OpenSSL not found"
+            exit 1
+          }
 
       - name: Build OQS Provider
         run: |
           mkdir build
           cd build
-          cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DOQS_MINIMAL_BUILD=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" ..
+          cmake -GNinja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DOQS_MINIMAL_BUILD=ON `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DBUILD_TESTING=OFF `
+            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" `
+            ..
           ninja oqsprov
 
       - name: Create Artifact Directory
