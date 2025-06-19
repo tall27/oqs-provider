@@ -21,27 +21,35 @@ jobs:
     runs-on: ${{matrix.os}}
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout OpenSSL master
-        uses: actions/checkout@v4
+
+      - name: Download pre-built OpenSSL
+        uses: dawidd6/action-download-artifact@v3
         with:
-          repository: openssl/openssl
-          path: openssl
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: windows.yaml
+          repo: tall27/openssl-build
+          run_id: 15718255982
+          name: openssl-windows
+          path: openssl-prebuilt
+
+      - name: Install pre-built OpenSSL
+        run: |
+          mkdir c:\openssl32
+          Copy-Item -Path "openssl-prebuilt\*" -Destination "c:\openssl32\" -Recurse -Force
+
       - uses: actions/checkout@v4
         with:
           repository: open-quantum-safe/liboqs
           ref: main
           path: liboqs
+
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.platform.arch }}
-      - name: Setup nasm
-        uses: ilammy/setup-nasm@v1
-        with:
-          platform: ${{ matrix.platform.arch }}
-      - name: Setup perl
-        uses: shogo82148/actions-setup-perl@v1
+
       - name: Install Ninja
         run: choco install ninja
+
       - name: build liboqs
         run: |
           cmake --version
@@ -51,24 +59,7 @@ jobs:
           ninja
           ninja install
         working-directory: liboqs
-      - name: prepare the OpenSSL build directory
-        run: mkdir _build
-        working-directory: openssl
-      - name: OpenSSL config
-        working-directory: openssl\_build
-        run: |
-          perl ..\Configure --banner=Configured --prefix=c:\openssl32 no-makedepend ${{ matrix.platform.osslconfig }}
-          perl configdata.pm --dump
-      - name: OpenSSL build
-        working-directory: openssl\_build
-        run: nmake /S
-      - name: OpenSSL install
-        run: |
-          mkdir c:\openssl32
-          cd openssl\_build
-          nmake install_sw
-      
-      # Build OQS Provider
+
       - name: Configure OQS Provider
         run: |
           mkdir build
