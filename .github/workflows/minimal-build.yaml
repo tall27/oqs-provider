@@ -16,24 +16,25 @@ jobs:
         with:
           path: |
             C:\ProgramData\chocolatey
-            C:\Program Files\OpenSSL-Win64
+            C:\Program Files\OpenSSL
             C:\tools\ninja
-          key: ${{ runner.os }}-choco-deps-v1
+          key: ${{ runner.os }}-choco-deps-v2
           restore-keys: |
             ${{ runner.os }}-choco-
 
       # 🎯 SMART INSTALLATION (only if not cached)
       - name: Install dependencies via Chocolatey
         run: |
-          # Check if OpenSSL is already installed (from cache)
-          if (-not (Test-Path "C:\Program Files\OpenSSL-Win64\bin\openssl.exe")) {
+          # Install OpenSSL if not present
+          if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
             Write-Host "Installing OpenSSL via Chocolatey..."
             choco install openssl --quiet --yes
+            refreshenv
           } else {
-            Write-Host "✅ OpenSSL found in cache"
+            Write-Host "✅ OpenSSL found"
           }
           
-          # Check if Ninja is already installed (from cache)
+          # Install Ninja if not present
           if (-not (Test-Path "C:\tools\ninja\ninja.exe")) {
             Write-Host "Installing Ninja via Chocolatey..."
             choco install ninja --quiet --yes
@@ -41,8 +42,21 @@ jobs:
             Write-Host "✅ Ninja found in cache"
           }
           
-          # Set environment variable
-          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+          # Auto-detect OpenSSL location
+          $openssl_paths = @(
+            "C:\Program Files\OpenSSL",
+            "C:\Program Files\OpenSSL-Win64", 
+            "C:\OpenSSL",
+            "C:\OpenSSL-Win64"
+          )
+          
+          foreach ($path in $openssl_paths) {
+            if (Test-Path "$path\bin\openssl.exe") {
+              Write-Host "Found OpenSSL at: $path"
+              echo "OPENSSL_ROOT_DIR=$path" >> $env:GITHUB_ENV
+              break
+            }
+          }
 
       - name: Verify OpenSSL installation
         run: |
