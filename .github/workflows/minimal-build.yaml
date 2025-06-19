@@ -1,4 +1,4 @@
-name: Minimal Windows Build
+name: Minimal Windows Build (Cached)
 on:
   workflow_dispatch:
 jobs:
@@ -9,56 +9,48 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: win64
-          
-      - name: Install OpenSSL
+
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\ProgramData\chocolatey
+            C:\Program Files\OpenSSL-Win64
+            C:\tools\ninja
+          key: ${{ runner.os }}-build-deps-${{ hashFiles('.github/workflows/*.yml') }}-v1
+          restore-keys: |
+            ${{ runner.os }}-build-deps-
+
+      - name: Install dependencies (if not cached)
         run: |
-          choco install openssl --quiet --yes
-          
-          # Find the actual OpenSSL installation path
-          $openssl_path = Get-ChildItem "C:\Program Files" | Where-Object {$_.Name -like "*OpenSSL*"} | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $openssl_path) {
-            $openssl_path = "C:\Program Files\OpenSSL-Win64"
-          }
-          
-          echo "OpenSSL installed at: $openssl_path"
-          echo "OPENSSL_ROOT_DIR=$openssl_path" >> $env:GITHUB_ENV
-          
-          # Verify the installation
-          if (Test-Path "$openssl_path\include\openssl\opensslv.h") {
-            echo "✅ OpenSSL headers found"
+          if (-not (Test-Path "C:\Program Files\OpenSSL-Win64\bin\openssl.exe")) {
+            Write-Host "Installing OpenSSL..."
+            choco install openssl --quiet --yes
           } else {
-            echo "❌ OpenSSL headers not found"
-            exit 1
+            Write-Host "✅ OpenSSL found in cache"
           }
           
-      - name: Install Ninja
-        run: choco install ninja --quiet --yes
-        
+          if (-not (Test-Path "C:\tools\ninja\ninja.exe")) {
+            Write-Host "Installing Ninja..."
+            choco install ninja --quiet --yes
+          } else {
+            Write-Host "✅ Ninja found in cache"
+          }
+          
+          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+
       - name: Build OQS Provider
         run: |
-          echo "Using OpenSSL at: $env:OPENSSL_ROOT_DIR"
-          
           mkdir build
           cd build
-          
-          cmake -GNinja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DOQS_MINIMAL_BUILD=ON `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DBUILD_TESTING=OFF `
-            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" `
-            -DOPENSSL_INCLUDE_DIR="$env:OPENSSL_ROOT_DIR\include" `
-            -DOPENSSL_CRYPTO_LIBRARY="$env:OPENSSL_ROOT_DIR\lib\libcrypto.lib" `
-            -DOPENSSL_SSL_LIBRARY="$env:OPENSSL_ROOT_DIR\lib\libssl.lib" `
-            ..
-            
+          cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DOQS_MINIMAL_BUILD=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" ..
           ninja oqsprov
-          
+
       - name: Create Artifact Directory
         run: |
           mkdir artifacts
           Copy-Item "build\oqsprov\oqsprov.dll" -Destination "artifacts\"
-          
+
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
