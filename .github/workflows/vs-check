@@ -1,0 +1,30 @@
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Visual Studio Build Tools
+        run: |
+          $paths = @(
+            'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat',
+            'C:\Program Files\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat',
+            'C:\Program Files\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'
+          )
+          $found = $false
+          foreach ($p in $paths) {
+            if (Test-Path $p) {
+              Write-Host "Build Tools found at $p"
+              $found = $true
+              break
+            }
+          }
+          if (-not $found) {
+            Write-Error "Visual Studio Build Tools (with C++ tools) not found. Please install them!"
+            exit 1
+          }
+        shell: pwsh
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: win64
