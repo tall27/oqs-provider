@@ -13,12 +13,10 @@ jobs:
         with:
           arch: win64
           
-      - name: Download and Install OpenSSL
+      - name: Install OpenSSL
         run: |
-          mkdir c:\openssl32
-          Invoke-WebRequest -Uri "https://github.com/tall27/openssl-build/raw/refs/heads/master/openssl.exe"
-          #Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/libcrypto-3-x64.dll" -OutFile "c:\openssl32\libcrypto-3-x64.dll"
-          #Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tall27/openssl-build/master/libssl-3-x64.dll" -OutFile "c:\openssl32\libssl-3-x64.dll"
+          choco install openssl
+          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV   
           
       - name: Install Ninja
         run: choco install ninja
