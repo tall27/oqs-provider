@@ -18,7 +18,8 @@ jobs:
             C:\ProgramData\chocolatey
             C:\Program Files\OpenSSL
             C:\tools\ninja
-          key: ${{ runner.os }}-choco-deps-v3
+            C:\liboqs
+          key: ${{ runner.os }}-choco-deps-v4
           restore-keys: |
             ${{ runner.os }}-choco-
 
@@ -76,6 +77,36 @@ jobs:
             exit 1
           }
 
+      - name: Build and Install liboqs
+        run: |
+          # Check if liboqs is already built (from cache)
+          if (-not (Test-Path "C:\liboqs\lib\cmake\liboqs\liboqsConfig.cmake")) {
+            Write-Host "Building liboqs..."
+            
+            # Clone liboqs
+            git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git C:\liboqs-src
+            
+            # Build liboqs
+            mkdir C:\liboqs-build
+            cd C:\liboqs-build
+            
+            cmake -GNinja `
+              -DCMAKE_BUILD_TYPE=Release `
+              -DCMAKE_INSTALL_PREFIX=C:\liboqs `
+              -DBUILD_SHARED_LIBS=OFF `
+              -DOQS_BUILD_ONLY_LIB=ON `
+              C:\liboqs-src
+              
+            ninja install
+            
+            Write-Host "✅ liboqs built and installed"
+          } else {
+            Write-Host "✅ liboqs found in cache"
+          }
+          
+          # Set liboqs path for oqs-provider
+          echo "liboqs_DIR=C:\liboqs\lib\cmake\liboqs" >> $env:GITHUB_ENV
+
       - name: Build OQS Provider
         run: |
           mkdir build
@@ -86,6 +117,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF `
             -DBUILD_TESTING=OFF `
             -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" `
+            -Dliboqs_DIR="$env:liboqs_DIR" `
             ..
           ninja oqsprov
 
